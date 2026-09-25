@@ -39,4 +39,18 @@ export const api = {
   crossValidate: (id, probes, node = 'a') =>
     req(`/snapshots/${id}/cross-validate`, { method: 'POST', body: { probes, node } }),
   runs: () => req('/runs'),
+  // config import closed loop
+  uploadImport: (filename, text) =>
+    req('/imports', { method: 'POST', body: { filename, text } }),
+  imports: () => req('/imports'),
+  importSession: (id) => req(`/imports/${id}`),
+  updateDraft: (iid, did, body) =>
+    req(`/imports/${iid}/drafts/${did}`, { method: 'PUT', body }),
+  adoptDraft: (iid, did, expected_revision) =>
+    req(`/imports/${iid}/drafts/${did}/adopt`,
+      { method: 'POST', body: { expected_revision } }),
+  crossValidateDraft: (iid, did, probes, node = 'a') =>
+    req(`/imports/${iid}/drafts/${did}/cross-validate`,
+      { method: 'POST', body: { probes, node } }),
+  adoptions: () => req('/adoptions'),
 };

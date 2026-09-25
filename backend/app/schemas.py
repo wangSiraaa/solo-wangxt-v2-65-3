@@ -63,3 +63,22 @@ class NeighborIn(BaseModel):
     inbound_policy: Optional[str] = None
     outbound_policy: Optional[str] = None
     description: str = ""
+
+
+class ImportIn(BaseModel):
+    filename: str = ""
+    text: str
+
+
+class DraftUpdateIn(BaseModel):
+    default_action: Optional[str] = Field(default=None,
+                                          pattern="^(permit|deny)$")
+    confirm_default: Optional[bool] = None
+    target_policy_id: Optional[int] = None     # used together with retarget
+    retarget: bool = False
+    rules: Optional[List[RuleIn]] = None       # edited rules supersede parsed
+
+
+class AdoptIn(BaseModel):
+    expected_revision: Optional[int] = None    # optimistic concurrency token
+    created_by: str = "import"

@@ -93,3 +93,20 @@ th { color: var(--muted); font-weight: 600; }
 .cvbox.mismatch { border-left: 4px solid var(--deny); }
 tr.badrow { background: rgba(255,107,107,.08); }
 tr.okrow { background: rgba(46,204,113,.06); }
+/* import */
+.draftcard { background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+.draftcard .bar { background: transparent; border: none; padding: 4px 0; }
+.diagbox { background: var(--panel); border-radius: 8px; padding: 6px 12px;
+  margin: 8px 0; }
+.diagbox ul { margin: 4px 0; padding-left: 18px; }
+.diag-error { color: var(--deny); }
+.diag-warning { color: var(--warn); }
+.diag-info { color: var(--muted); }
+.linetable td code { white-space: pre-wrap; word-break: break-all; }
+.linetable tr.partial { background: rgba(244,183,64,.06); }
+.diffmini { background: var(--panel); border-radius: 8px; padding: 8px 12px;
+  margin: 8px 0; }
+.conflict { background: #4a3c18; color: #ffe0a0; border: 1px solid var(--warn);
+  border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.importview h4 { margin: 10px 0 6px; }

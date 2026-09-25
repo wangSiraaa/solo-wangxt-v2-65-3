@@ -44,6 +44,7 @@ def policy_payload(db_pol: dbmod.Policy) -> dict:
         "default_action": db_pol.default_action,
         "description": db_pol.description,
         "draft": db_pol.draft,
+        "revision": db_pol.revision,
         "rules": [
             {
                 "id": r.id, "seq": r.seq, "prefix": r.prefix,
@@ -78,7 +79,7 @@ def validate_rule_dicts(family: int, rules: List[dict]) -> List[EngineRule]:
 
 
 def replace_rules(session: Session, db_pol: dbmod.Policy,
-                  rules: List[dict]) -> dbmod.Policy:
+                  rules: List[dict], commit: bool = True) -> dbmod.Policy:
     validate_rule_dicts(db_pol.family, rules)
     # delete-then-insert in one flush order (SQLite otherwise reorders
     # cascade inserts ahead of deletes and trips the (policy_id, seq) key)
@@ -94,8 +95,12 @@ def replace_rules(session: Session, db_pol: dbmod.Policy,
             remark=r.get("remark", ""),
         ) for r in sorted(rules, key=lambda x: int(x["seq"]))
     ]
+    db_pol.revision = (db_pol.revision or 0) + 1
     session.add(db_pol)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     session.refresh(db_pol)
     return db_pol
 
@@ -105,7 +110,8 @@ def replace_rules(session: Session, db_pol: dbmod.Policy,
 # --------------------------------------------------------------------------
 
 def create_snapshot(session: Session, db_pol: dbmod.Policy,
-                    label: str = "", created_by: str = "lab") -> dbmod.Snapshot:
+                    label: str = "", created_by: str = "lab",
+                    commit: bool = True) -> dbmod.Snapshot:
     ep = engine_policy(db_pol)
     last = session.scalar(
         select(dbmod.Snapshot)
@@ -131,7 +137,10 @@ def create_snapshot(session: Session, db_pol: dbmod.Policy,
         created_by=created_by,
     )
     session.add(snap)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     session.refresh(snap)
     return snap
 

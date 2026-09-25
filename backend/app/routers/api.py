@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import ipaddress
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from .. import db as dbmod, service
+from .. import db as dbmod, import_service, service
 from ..engine import PolicyError
+from ..import_service import ConflictError
 from ..schemas import (
-    ClassifyIn, DiffIn, NeighborIn, PolicyIn, PolicyRulesIn, ProbesIn,
-    ScenarioIn, SnapshotIn,
+    AdoptIn, ClassifyIn, DiffIn, DraftUpdateIn, ImportIn, NeighborIn,
+    PolicyIn, PolicyRulesIn, ProbesIn, ScenarioIn, SnapshotIn,
 )
 from ..service import ValidationError
 from ..treeview import policy_trie, hit_path, coverage_map
@@ -73,6 +74,8 @@ def get_policy(pid: int, db: Session = Depends(get_db)):
 @router.put("/policies/{pid}")
 def update_policy_meta(pid: int, body: PolicyIn, db: Session = Depends(get_db)):
     p = _get_policy(db, pid)
+    if p.default_action != body.default_action:
+        p.revision = (p.revision or 0) + 1     # semantics changed
     p.default_action = body.default_action
     p.description = body.description
     db.commit()
@@ -313,3 +316,111 @@ def replay_scenario(scid: int, db: Session = Depends(get_db)):
     s.results = out
     db.commit()
     return out
+
+
+# ---------------------------------------------------------------- imports
+def _get_import(db: Session, iid: int) -> dbmod.ImportSession:
+    imp = db.get(dbmod.ImportSession, iid)
+    if imp is None:
+        raise HTTPException(404, f"import session {iid} not found")
+    return imp
+
+
+def _get_draft(db: Session, iid: int, did: int) -> dbmod.ImportDraft:
+    d = db.get(dbmod.ImportDraft, did)
+    if d is None or d.session_id != iid:
+        raise HTTPException(404, f"draft {did} not found in import {iid}")
+    return d
+
+
+@router.post("/imports", status_code=201)
+def upload_import(body: ImportIn, response: Response,
+                  db: Session = Depends(get_db)):
+    """Upload FRR config text. Idempotent: identical content returns the
+    existing session (200 + deduplicated flag) instead of a new one."""
+    if not body.text.strip():
+        raise HTTPException(422, "empty config text")
+    imp, created = import_service.create_import_session(
+        db, body.filename, body.text)
+    out = import_service.session_dict(db, imp)
+    if not created:
+        response.status_code = 200
+        out["deduplicated"] = True
+    return out
+
+
+@router.get("/imports")
+def list_imports(db: Session = Depends(get_db)):
+    imps = db.query(dbmod.ImportSession) \
+        .order_by(dbmod.ImportSession.created_at.desc()).all()
+    return [import_service.session_dict(db, i, detail=False) for i in imps]
+
+
+@router.get("/imports/{iid}")
+def get_import(iid: int, db: Session = Depends(get_db)):
+    """Full preview: raw text, per-line diagnostics, drafts, semantic diff."""
+    return import_service.session_dict(db, _get_import(db, iid))
+
+
+@router.put("/imports/{iid}/drafts/{did}")
+def update_draft(iid: int, did: int, body: DraftUpdateIn,
+                 db: Session = Depends(get_db)):
+    _get_import(db, iid)
+    draft = _get_draft(db, iid, did)
+    try:
+        import_service.update_draft(
+            db, draft,
+            default_action=body.default_action,
+            confirm_default=body.confirm_default,
+            target_policy_id=body.target_policy_id,
+            retarget=body.retarget,
+            rules=[r.model_dump() for r in body.rules]
+            if body.rules is not None else None)
+    except (ValidationError, PolicyError, ValueError) as e:
+        raise HTTPException(422, str(e))
+    return import_service.draft_dict(db, draft)
+
+
+@router.post("/imports/{iid}/drafts/{did}/adopt", status_code=201)
+def adopt_draft(iid: int, did: int, body: AdoptIn,
+                db: Session = Depends(get_db)):
+    """Atomically replace mainline rules + create the snapshot, or nothing."""
+    imp = _get_import(db, iid)
+    draft = _get_draft(db, iid, did)
+    try:
+        return import_service.adopt_draft(
+            db, imp, draft, expected_revision=body.expected_revision,
+            created_by=body.created_by)
+    except ConflictError as e:
+        raise HTTPException(409, str(e))
+    except (ValidationError, PolicyError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/imports/{iid}/drafts/{did}/cross-validate")
+def cross_validate_draft(iid: int, did: int, body: ProbesIn,
+                         db: Session = Depends(get_db)):
+    """Limited cross-check of a draft against the local FRR containers."""
+    _get_import(db, iid)
+    draft = _get_draft(db, iid, did)
+    try:
+        return import_service.cross_validate_draft(
+            db, draft, body.probes, node=body.node)
+    except FRRUnavailable as e:
+        raise HTTPException(503, str(e))
+    except (ValidationError, PolicyError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+@router.get("/adoptions")
+def list_adoptions(limit: int = 50, db: Session = Depends(get_db)):
+    """Mapping history: import draft -> policy snapshot."""
+    rows = db.query(dbmod.ImportAdoption) \
+        .order_by(dbmod.ImportAdoption.created_at.desc()).limit(limit).all()
+    return [{
+        "id": a.id, "session_id": a.session_id, "draft_id": a.draft_id,
+        "policy_id": a.policy_id, "snapshot_id": a.snapshot_id,
+        "base_revision": a.base_revision, "new_version": a.new_version,
+        "witness_count": a.witness_count,
+        "created_at": a.created_at.isoformat(),
+    } for a in rows]
