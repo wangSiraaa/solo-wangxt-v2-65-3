@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import ipaddress
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from .. import db as dbmod, service
+from .. import db as dbmod, import_service, service
 from ..engine import PolicyError
+from ..import_service import ConflictError
 from ..schemas import (
-    ClassifyIn, DiffIn, NeighborIn, PolicyIn, PolicyRulesIn, ProbesIn,
+    ClassifyIn, DiffIn, ImportAdoptIn, ImportCrossValidateIn, ImportResolveIn,
+    ImportUploadIn, NeighborIn, PolicyIn, PolicyRulesIn, ProbesIn,
     ScenarioIn, SnapshotIn,
 )
 from ..service import ValidationError
@@ -313,3 +315,99 @@ def replay_scenario(scid: int, db: Session = Depends(get_db)):
     s.results = out
     db.commit()
     return out
+
+
+# ---------------------------------------------------------------- imports
+def _get_import(db: Session, iid: int) -> dbmod.ImportSession:
+    imp = db.get(dbmod.ImportSession, iid)
+    if imp is None:
+        raise HTTPException(404, f"import session {iid} not found")
+    return imp
+
+
+@router.post("/imports", status_code=201)
+def upload_import(body: ImportUploadIn, response: Response,
+                  db: Session = Depends(get_db)):
+    """Upload FRR prefix-list text.  Idempotent: the same file content maps to
+    one session (sha256); re-submission returns it with deduplicated=true."""
+    if not body.text.strip():
+        raise HTTPException(422, "empty configuration text")
+    imp, created = import_service.create_import_session(
+        db, body.filename, body.text)
+    out = import_service.session_detail(imp)
+    out["deduplicated"] = not created
+    if not created:
+        response.status_code = 200
+    return out
+
+
+@router.get("/imports")
+def list_imports(db: Session = Depends(get_db)):
+    imps = db.query(dbmod.ImportSession) \
+        .order_by(dbmod.ImportSession.created_at.desc(),
+                  dbmod.ImportSession.id.desc()).all()
+    return [import_service.session_summary(i) for i in imps]
+
+
+@router.get("/imports/{iid}")
+def get_import(iid: int, db: Session = Depends(get_db)):
+    """Full session: raw text, per-line mapping, drafts, diagnostics."""
+    return import_service.session_detail(_get_import(db, iid))
+
+
+@router.get("/imports/{iid}/preview")
+def preview_import(iid: int, db: Session = Depends(get_db)):
+    """Semantic diff (minimal witness set) of each normalized draft against
+    the current mainline, plus the version tokens needed for adoption."""
+    imp = _get_import(db, iid)
+    try:
+        return import_service.preview(db, imp)
+    except PolicyError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/imports/{iid}/resolve")
+def resolve_import(iid: int, body: ImportResolveIn, db: Session = Depends(get_db)):
+    """Handle one error diagnostic (drop the offending line).  Adoption is
+    blocked until every error in the session is resolved."""
+    imp = _get_import(db, iid)
+    try:
+        imp = import_service.resolve_diagnostic(db, imp, body.diagnostic_id,
+                                                body.action)
+    except ValidationError as e:
+        raise HTTPException(422, str(e))
+    return import_service.session_detail(imp)
+
+
+@router.post("/imports/{iid}/adopt", status_code=201)
+def adopt_import(iid: int, body: ImportAdoptIn, db: Session = Depends(get_db)):
+    """Atomically replace the mainline rules with the draft and create the
+    policy snapshot in one transaction.  409 if the mainline moved since the
+    client's preview (optimistic concurrency)."""
+    imp = _get_import(db, iid)
+    try:
+        return import_service.adopt_draft(
+            db, imp, body.draft_id,
+            expected_base_updated_at=body.expected_base_updated_at,
+            default_action=body.default_action,
+            label=body.label, created_by=body.created_by)
+    except ConflictError as e:
+        raise HTTPException(409, detail={
+            "message": str(e), "current_updated_at": e.current_updated_at})
+    except (ValidationError, PolicyError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/imports/{iid}/cross-validate")
+def cross_validate_import(iid: int, body: ImportCrossValidateIn,
+                          db: Session = Depends(get_db)):
+    """Limited cross-validation of a draft against the local FRR container
+    (no snapshot required; the run is recorded with snapshot_id=null)."""
+    imp = _get_import(db, iid)
+    try:
+        return import_service.cross_validate_draft(
+            db, imp, body.draft_id, body.probes, node=body.node)
+    except FRRUnavailable as e:
+        raise HTTPException(503, str(e))
+    except (ValidationError, PolicyError, ValueError) as e:
+        raise HTTPException(422, str(e))

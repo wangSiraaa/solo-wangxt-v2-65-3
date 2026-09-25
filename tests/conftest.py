@@ -32,7 +32,9 @@ def db():
     s = dbmod.SessionLocal()
     # clean slate for ordering-sensitive tests
     for tbl in (dbmod.Run, dbmod.Scenario, dbmod.Snapshot,
-                dbmod.Rule, dbmod.Policy, dbmod.Neighbor):
+                dbmod.Rule, dbmod.Policy, dbmod.Neighbor,
+                dbmod.ImportLine, dbmod.ImportDiagnostic,
+                dbmod.ImportDraft, dbmod.ImportSession):
         s.query(tbl).delete()
     s.commit()
     yield s

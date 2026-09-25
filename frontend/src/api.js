@@ -8,7 +8,15 @@ async function req(path, { method = 'GET', body } = {}) {
   });
   const text = await r.text();
   const data = text ? JSON.parse(text) : null;
-  if (!r.ok) throw new Error(data?.detail || `${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    const detail = data?.detail;
+    const err = new Error(typeof detail === 'string'
+      ? detail
+      : detail?.message || `${r.status} ${r.statusText}`);
+    err.status = r.status;
+    err.detail = typeof detail === 'object' ? detail : null;
+    throw err;
+  }
   return data;
 }
 
@@ -39,4 +47,15 @@ export const api = {
   crossValidate: (id, probes, node = 'a') =>
     req(`/snapshots/${id}/cross-validate`, { method: 'POST', body: { probes, node } }),
   runs: () => req('/runs'),
+  // config import
+  uploadImport: (filename, text) =>
+    req('/imports', { method: 'POST', body: { filename, text } }),
+  imports: () => req('/imports'),
+  importDetail: (id) => req(`/imports/${id}`),
+  importPreview: (id) => req(`/imports/${id}/preview`),
+  importResolve: (id, diagnostic_id, action = 'drop') =>
+    req(`/imports/${id}/resolve`, { method: 'POST', body: { diagnostic_id, action } }),
+  importAdopt: (id, body) => req(`/imports/${id}/adopt`, { method: 'POST', body }),
+  importCrossValidate: (id, draft_id, probes, node = 'a') =>
+    req(`/imports/${id}/cross-validate`, { method: 'POST', body: { draft_id, probes, node } }),
 };

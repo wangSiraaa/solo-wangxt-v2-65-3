@@ -94,6 +94,9 @@ def replace_rules(session: Session, db_pol: dbmod.Policy,
             remark=r.get("remark", ""),
         ) for r in sorted(rules, key=lambda x: int(x["seq"]))
     ]
+    # bump the optimistic-concurrency token: import adoption compares this
+    # timestamp to detect "mainline moved since preview"
+    db_pol.updated_at = dbmod.utcnow()
     session.add(db_pol)
     session.commit()
     session.refresh(db_pol)

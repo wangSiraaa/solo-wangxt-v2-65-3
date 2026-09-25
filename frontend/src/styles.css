@@ -93,3 +93,42 @@ th { color: var(--muted); font-weight: 600; }
 .cvbox.mismatch { border-left: 4px solid var(--deny); }
 tr.badrow { background: rgba(255,107,107,.08); }
 tr.okrow { background: rgba(46,204,113,.06); }
+/* import */
+.importview textarea { margin-bottom: 12px; }
+.importcols { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+.importlist h4, .importdetail h4 { margin: 8px 0; color: var(--muted); }
+.sessitem { display: block; width: 100%; text-align: left; margin-bottom: 6px;
+  background: var(--panel2); padding: 8px 10px; }
+.sessitem.active { border-color: var(--accent); background: #22344f; }
+.sessitem > div { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.sessitem .small { font-size: 12px; }
+.tag.st-pending { background: #4a3c18; color: #ffe0a0; }
+.tag.st-ready { background: #143a24; color: #87e0a3; }
+.tag.st-partial { background: #1d3a4a; color: #9fd8ff; }
+.tag.st-adopted { background: #143a24; color: #87e0a3; }
+.draftcard.st-adopted { opacity: .88; }
+table.lines { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+table.lines td { border-bottom: 1px solid #1a2234; padding: 3px 8px; }
+td.lineno { color: var(--muted); text-align: right; width: 40px; user-select: none; }
+td.rawline code { background: none; padding: 0; white-space: pre; }
+td.linetag { width: 60px; }
+tr.ln-comment .rawline { color: #7d8aa8; font-style: italic; }
+tr.ln-blank .rawline { opacity: .4; }
+tr.ln-unrecognized .rawline { color: #c8a86a; }
+tr.sev-error { background: rgba(255,107,107,.09); }
+tr.sev-warning { background: rgba(244,183,64,.06); }
+.diag { font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  font-size: 12.5px; padding: 2px 0; }
+.diag.error { color: #ffb3b3; }
+.diag.warning { color: #ffe0a0; }
+.diag.info { color: #9fd8ff; }
+.diag.resolved { opacity: .6; text-decoration: line-through; }
+.diag button { margin-left: 8px; }
+.draftcard { background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.draftcard .bar { background: none; border: none; padding: 4px 0; }
+.preview { margin: 8px 0; }
+.conflict { background: #3a2a1a; border: 1px solid var(--warn); border-radius: 8px;
+  padding: 8px 12px; margin: 8px 0; display: flex; gap: 10px; align-items: center;
+  flex-wrap: wrap; }
+.bar .probe { min-width: 220px; }

@@ -51,7 +51,32 @@
 * 场景保存**有序探针列表**，`/api/scenarios/{id}/replay` 以相同顺序对 before/after 两个快照确定性回放，返回每条命中链与差异；
 * 快照 payload 自包含，后续再编辑规则不影响历史回放——满足“可回放输入及生效次序”。
 
-## 4. FRR 容器交叉验证
+## 4. FRR 配置离线导入（来源保真 → 隔离草稿 → 原子采纳）
+
+网络团队已有的 FRRouting prefix-list 文本可以**整文件导入**审查，无需逐条重录：
+
+* **来源保真**：解析 `ip/ipv6 prefix-list NAME seq N permit|deny PREFIX [ge X] [le Y]`、
+  `description` 行；原始文本逐行保留（行号、注释 `!`/`#`、空行、无法识别的指令），
+  行→规则映射历史入库（`import_lines`）。
+* **隔离草稿**：一次导入按 `(列表名, 地址族)` 拆成草稿（双栈文件 → 两个草稿），
+  只写 `import_*` 表，**不碰主线规则**；草稿内存放规范化后的候选规则
+  （前缀规范化、按 seq 排序、缺 seq 按 FRR 惯例 +5 自动编号）。
+* **分类诊断**（各自独立解释）：`duplicate_seq` 序号重复、`mixed_family` 地址族混用、
+  `invalid_range` 非法 ge/le 范围（以上 error，阻塞采纳）、`missing_default` 默认行为
+  缺失（warning，说明隐式默认动作如何取值）、`unrecognized` 未识别指令（warning）。
+  带错误的行不进入候选规则；每条 error 必须显式“丢弃该行”处理后，草稿才可采纳。
+* **原子采纳**：替换主线规则 + 生成不可变快照 + 草稿/会话状态在**同一事务**提交，
+  任何失败整体回滚，绝不产生半个快照。采纳携带预览时的 `updated_at` 令牌做乐观并发：
+  主线若已更新返回 **409 版本冲突**，草稿、诊断与原始文本全部保留，刷新后仍在，
+  重新预览获取新令牌后可再次采纳。
+* **幂等**：会话按文件内容 sha256 去重，相同文件重复提交返回同一会话（200 +
+  `deduplicated: true`），只生成一次。
+* **语义预览**：采纳前展示草稿与当前主线的**最小见证集**（语义而非文本 diff）——
+  重排但语义等价的文件显示“无行为变化”。
+* **有限交叉验证**：草稿可直接推送到本地 FRR 容器比对（无需先生成快照，
+  运行记录 `snapshot_id=null` 入库）。
+
+## 5. FRR 容器交叉验证
 
 两个 FRR 8.4 节点在隔离的 internal bridge（`172.30.10.0/24`，无外部连通）上。验证流程（`backend/app/validate.py`）：
 
@@ -66,7 +91,7 @@ FRR 语义已对照其源码 `lib/plist.c` 核对（包含关系、无 ge/le 精
 
 传输默认 `docker exec`（`RLAB_FRR_TRANSPORT=docker`），也可切到 SSH（`RLAB_FRR_TRANSPORT=ssh`，见 `backend/app/config.py`）。容器不在线时相关测试自动 skip，UI 显示离线徽标。
 
-## 5. 快速开始
+## 6. 快速开始
 
 ### 免容器 / 免 Postgres（SQLite，最快体验）
 
@@ -100,7 +125,7 @@ curl -s -XPOST localhost:8765/api/snapshots/<id>/cross-validate \
   -d '{"probes":["192.168.100.0/24","10.1.2.3/32"],"node":"a"}'
 ```
 
-## 6. 测试
+## 7. 测试
 
 ```bash
 pip install pytest httpx
@@ -110,9 +135,10 @@ python -m pytest tests/ -q
 * `test_engine.py`：精确匹配、ge/le 窗口、首条匹配、默认拒绝、v4/v6 隔离、三个示例决策；
 * `test_properties.py`：在完整枚举的 /0../6（v4）与 /32../34（v6）格子上，对数百个随机策略用暴力预言机验证**遮蔽判定**与**最小见证集**逐区域一致（非采样）；
 * `test_api.py`：编辑→快照→差异→回放的端到端 REST；
+* `test_import.py`：导入闭环验收——双栈导入回放、非法 ge/le 不产生半快照、重排等价文件零见证、重复提交幂等、采纳版本冲突与刷新后状态保留；
 * `test_frr_consistency.py`：FRR 输出解析、随机 400 例与 FRR `prefix_list_apply` 移植模型逐条一致；`test_live_frr_consistency` 在检测到容器时自动对真实 FRR 运行。
 
-## 7. 主要 API
+## 8. 主要 API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -129,14 +155,21 @@ python -m pytest tests/ -q
 | GET/POST | `/api/scenarios`、`/api/scenarios/{id}/replay` | 场景（输入+两个快照+结果） |
 | GET/POST | `/api/neighbors` | 本地实验室邻居 |
 | GET | `/api/frr/status`、`/api/runs` | 容器在线状态、历史验证运行 |
+| POST | `/api/imports` | 上传 FRR 配置文本（sha256 幂等，重复提交返回同一会话） |
+| GET | `/api/imports`、`/api/imports/{id}` | 导入会话列表 / 详情（原始文本、行映射、草稿、诊断） |
+| GET | `/api/imports/{id}/preview` | 草稿 vs 主线的最小见证集 + 采纳所需版本令牌 |
+| POST | `/api/imports/{id}/resolve` | 处理一条 error 诊断（丢弃该行） |
+| POST | `/api/imports/{id}/adopt` | 原子采纳（替换规则+生成快照单事务；主线已更新则 409） |
+| POST | `/api/imports/{id}/cross-validate` | 草稿直接推送 FRR 容器有限交叉验证 |
 
 ## 目录
 
 ```
 backend/app/   engine.py(匹配/遮蔽) trie.py(精确单元+最小见证) service.py db.py
+               importer.py(来源保真解析) import_service.py(草稿/原子采纳)
                validate.py frr_bridge.py treeview.py routers/api.py seed.py
-frontend/src/  App.jsx + components/(PolicyEditor/TrieView/DiffView/ReplayLab/Neighbors)
+frontend/src/  App.jsx + components/(PolicyEditor/TrieView/DiffView/ReplayLab/Neighbors/ImportView)
 frr/           两个节点的 daemons/vtysh/frr.conf 与独立 docker-compose
-tests/         引擎/属性/API/FRR 一致性
+tests/         引擎/属性/API/导入闭环/FRR 一致性
 docker-compose.yml   postgres + backend + router-a/b
 ```

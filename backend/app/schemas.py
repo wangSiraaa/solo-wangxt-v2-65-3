@@ -63,3 +63,29 @@ class NeighborIn(BaseModel):
     inbound_policy: Optional[str] = None
     outbound_policy: Optional[str] = None
     description: str = ""
+
+
+# ------------------------------------------------------------------- imports
+class ImportUploadIn(BaseModel):
+    filename: str = "upload.conf"
+    text: str
+
+
+class ImportResolveIn(BaseModel):
+    diagnostic_id: int
+    action: str = Field(pattern="^(drop)$")
+
+
+class ImportAdoptIn(BaseModel):
+    draft_id: int
+    expected_base_updated_at: Optional[str] = None
+    default_action: Optional[str] = Field(default=None,
+                                          pattern="^(permit|deny)$")
+    label: str = ""
+    created_by: str = "import"
+
+
+class ImportCrossValidateIn(BaseModel):
+    draft_id: int
+    probes: List[str]
+    node: str = "a"

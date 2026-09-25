@@ -131,6 +131,105 @@ class Run(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+# ---------------------------------------------------------------------------
+# Config import: source-fidelity upload -> isolated draft -> atomic adoption
+# ---------------------------------------------------------------------------
+
+class ImportSession(Base):
+    """
+    One uploaded FRR prefix-list file.  The raw text is stored verbatim so a
+    session (with its drafts, diagnostics and line mapping) survives refreshes
+    and can be reviewed/adopted later.  content_hash makes re-uploading the
+    same file idempotent: the existing session is returned instead.
+    """
+    __tablename__ = "import_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(256), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # pending (unresolved errors) / ready / partial (some drafts adopted) / adopted
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+
+    drafts: Mapped[List["ImportDraft"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan",
+        order_by="ImportDraft.id")
+    lines: Mapped[List["ImportLine"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan",
+        order_by="ImportLine.line_no")
+    diagnostics: Mapped[List["ImportDiagnostic"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan",
+        order_by="ImportDiagnostic.id")
+
+
+class ImportDraft(Base):
+    """
+    One parsed prefix-list (name, family) inside a session: the isolated
+    staging area.  rules_json holds the normalized candidate rules (canonical
+    prefixes, sorted by seq); mainline rules are only replaced atomically at
+    adoption time, together with the snapshot, in a single transaction.
+    """
+    __tablename__ = "import_drafts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "name", "family", name="uq_import_draft"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("import_sessions.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(128))
+    family: Mapped[int] = mapped_column(Integer)                    # 4 or 6
+    description: Mapped[str] = mapped_column(String(512), default="")
+    default_action: Mapped[str] = mapped_column(String(8), default="deny")
+    rules_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # pending (has unresolved errors) / ready / adopted
+    # mainline state observed at import time (informational baseline)
+    base_policy_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    base_updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adopted_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    adopted_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    session: Mapped[ImportSession] = relationship(back_populates="drafts")
+
+
+class ImportLine(Base):
+    """Mapping history: original line -> kind -> parsed rule / owning draft."""
+    __tablename__ = "import_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("import_sessions.id", ondelete="CASCADE"))
+    line_no: Mapped[int] = mapped_column(Integer)
+    raw: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(16))      # rule/description/comment/...
+    draft_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_drafts.id", ondelete="SET NULL"), nullable=True)
+    parsed_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    session: Mapped[ImportSession] = relationship(back_populates="lines")
+
+
+class ImportDiagnostic(Base):
+    """One typed finding.  Errors block adoption until resolved (dropped)."""
+    __tablename__ = "import_diagnostics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("import_sessions.id", ondelete="CASCADE"))
+    draft_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_drafts.id", ondelete="CASCADE"), nullable=True)
+    line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    severity: Mapped[str] = mapped_column(String(8))   # error/warning/info
+    kind: Mapped[str] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(Text, default="")
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    session: Mapped[ImportSession] = relationship(back_populates="diagnostics")
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
 
